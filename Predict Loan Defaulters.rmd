@@ -1,0 +1,372 @@
+---
+title: "Early Detection of Loan Defaulters"
+author: "NALAJALA, SRIDHAR"
+date: "july 12th 2020"
+output:
+  pdf_document: default
+  always_allow_html: yes
+  html_document:
+    df_print: paged
+  word_document: default
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+```{r echo=FALSE, message=FALSE}
+#https://www.kaggle.com/mingyi1202/modeling-and-eda-practice/data
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(readr)
+library(caret)
+library(randomForest)
+library(pROC)
+library(rminer)
+```
+```{r echo=FALSE, message=FALSE}
+loan <- read.csv("LendingClub.csv")
+```
+```{r echo=FALSE, message=FALSE}
+#Missing data
+data.frame(colSums(sapply(loan, is.na)))
+```
+```{r echo=FALSE, message=FALSE}
+dim(loan) 
+```
+```{r echo=FALSE, message=FALSE}
+ggplot(data=loan, aes(x=grade, fill=purpose)) +
+  geom_bar()  
+```
+```{r echo=FALSE, message=FALSE}
+ggplot(data=loan, aes(x=purpose,y=int_rate)) +
+  geom_boxplot(fill="lightgreen", outlier.color = "red") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+```{r echo=FALSE, message=FALSE}
+loan %>%
+        count(loan_status) %>%
+        ggplot(aes(x = reorder(loan_status , desc(n)) , y = n , fill = n)) + 
+        geom_col() + 
+        coord_flip() + 
+        labs(x = 'Loan Status' , y = 'Count')
+```
+```{r echo=FALSE, message=FALSE}
+loan = loan %>%
+        mutate(loan_outcome = ifelse(loan_status %in% c('Charged Off' , 'Default') , 
+                                     1, 
+                                     ifelse(loan_status == 'Fully Paid' , 0 , 'No info')
+                                     ))
+loan2 = loan %>%
+        select(-loan_status) %>%
+        filter(loan_outcome %in% c(0 , 1))
+
+ggplot(loan2 , aes(x = grade , y = ..count.. , fill = factor(loan_outcome , c(1 , 0) , c('Default' , 'Fully Paid')))) + 
+        geom_bar() + 
+        theme(legend.title = element_blank())
+```
+```{r echo=FALSE, message=FALSE}
+
+```
+```{r echo=FALSE, message=FALSE}
+
+```
+```{r echo=FALSE, message=FALSE}
+
+```
+```{r echo=FALSE, message=FALSE}
+sub_loan <- loan %>%
+  select(annual_inc, open_acc, loan_amnt, purpose, dti, emp_length, home_ownership, delinq_2yrs, inq_last_6mths, pub_rec, revol_bal, revol_util, verification_status, int_rate, term, grade,loan_status,zip_code, addr_state, total_acc, installment, issue_d, earliest_cr_line,
+         mths_since_last_delinq, mths_since_last_major_derog)
+
+
+#mths_since_last_delinq
+sub_loan$delinq_month <- ifelse((sub_loan$mths_since_last_delinq > 0 & sub_loan$mths_since_last_delinq <13),"in 1 years", 
+                            ifelse((sub_loan$mths_since_last_delinq > 12 & sub_loan$mths_since_last_delinq <25),"in 2 years", 
+                            ifelse((sub_loan$mths_since_last_delinq > 24 & sub_loan$mths_since_last_delinq < 37), "in 3 years", "more than 3 years")
+                            ))
+sub_loan$delinq_month[is.na(sub_loan$delinq_month)] <- "No Delinq"
+
+#mths_since_last_major_derog
+sub_loan$derog_month <- ifelse((sub_loan$mths_since_last_major_derog > 0 & loan$mths_since_last_major_derog <13),"in 1 years", 
+                            ifelse((sub_loan$mths_since_last_major_derog > 12 & sub_loan$mths_since_last_major_derog <25),"in 2 years", 
+                                   ifelse((sub_loan$mths_since_last_major_derog > 24 & sub_loan$mths_since_last_major_derog < 37), "in 3 years", "more than 3 years")
+                            ))
+sub_loan$derog_month[is.na(sub_loan$mths_since_last_major_derog)] <- "No Delinq"
+
+#Substring the year of issue date
+sub_loan$issue_d <- as.numeric(substr(sub_loan$issue_d, 5, 9))
+
+#Substring the year of earliest_cr_line
+sub_loan$earliest_cr_line <- as.numeric(substr(sub_loan$earliest_cr_line, 5, 9))
+
+#Lookup missing value
+colSums(sapply(sub_loan, is.na))
+```
+```{r echo=FALSE, message=FALSE}
+## Remove all observations with at least one NA in a row
+#Extract rows that has missing values
+sub_loan <- sub_loan %>%
+  filter(!is.na(annual_inc), 
+         !is.na(open_acc),
+         !is.na(delinq_2yrs), 
+         !is.na(pub_rec),
+         !is.na(revol_util))
+#Combine 'other' purpose
+sub_loan$purpose[!(sub_loan$purpose%in% c("debt_consolidation", "credit_card", "home_improvement", "major_purchase", "small_business"))] <- "other"
+
+sub_loan$purpose[sub_loan$purpose %in% c("small_business", "other", "major_purchase", 
+                                         "home_improvement")] <-"other"
+
+
+#Create binary variable "bad_loan" as target variable
+sub_loan$bad_loan <- ifelse(sub_loan$loan_status %in% c("Charged Off", "Default", "Late (16-30 days)", "Late (31-120 days)", "Does not meet the credit policy. Status:Charged Off", "In Grace Period"), 1, 
+                             ifelse(sub_loan$loan_status == "Fully Paid", 0, "Other"))
+
+#Combine category of home ownership
+sub_loan$home_ownership[sub_loan$home_ownership %in% c("ANY", "NONE", "OTHER")] <-"OTHER"
+```
+```{r echo=FALSE, message=FALSE}
+sub_loan%>%
+  group_by(loan_status) %>%
+  summarise(cnt = n()) %>%
+  ggplot(aes(x = loan_status, y = cnt, fill = cnt)) + geom_col() + coord_flip()+
+  labs(y= "Count",title= "Number of Loan by Status")
+```
+```{r echo=FALSE, message=FALSE}
+## Remove unneccessary columns and these which refer to active loans
+sub_loan%>%
+  group_by(bad_loan) %>%
+  summarise(cnt = n()) %>%
+  ggplot(aes(x = bad_loan, y = cnt, fill = cnt)) + geom_col() + coord_flip()+
+    labs(y= "Count",title= "Number of Loan by Good/Bad")
+```
+```{r echo=FALSE, message=FALSE}
+#Extract only "good/bad" loan for building model
+sub_loan2 <- sub_loan%>%
+  filter(sub_loan$bad_loan != "Other",
+         sub_loan$emp_length != "n/a")
+
+#Convert character to factor
+sub_loan2$purpose <- as.factor(sub_loan2$purpose)
+sub_loan2$home_ownership <- as.factor(sub_loan2$home_ownership)
+sub_loan2$loan_status <- as.factor(sub_loan2$loan_status)
+sub_loan2$emp_length <- as.factor(sub_loan2$emp_length)
+sub_loan2$bad_loan <- as.factor(sub_loan2$bad_loan)
+sub_loan2$verification_status <- as.factor(sub_loan2$verification_status)
+sub_loan2$addr_state<- as.factor(sub_loan2$addr_state)
+sub_loan2$grade <- as.factor(sub_loan2$grade)
+sub_loan2$term <- as.factor(sub_loan2$term)
+sub_loan2$delinq_month <- as.factor(sub_loan2$delinq_month)
+sub_loan2$derog_month<- as.factor(sub_loan2$derog_month)
+
+summary(sub_loan2)
+```
+
+```{r echo=FALSE, message=FALSE}
+head(sub_loan2)
+```
+
+```{r echo=FALSE, message=FALSE}
+sub_loan2%>%
+  group_by(bad_loan) %>%
+    count() %>% 
+  ungroup() %>% 
+  mutate(per=`n`/sum(`n`))
+```
+```{r echo=FALSE, message=FALSE}
+## Final exploration
+sub_loan3<- sub_loan%>%
+  filter(loan_status == "Current",
+         emp_length != "n/a")
+
+sub_loan3$purpose <- as.factor(sub_loan3$purpose)
+sub_loan3$home_ownership <- as.factor(sub_loan3$home_ownership)
+sub_loan3$loan_status <- as.factor(sub_loan3$loan_status)
+sub_loan3$emp_length <- as.factor(sub_loan3$emp_length)
+sub_loan3$bad_loan <- as.factor(sub_loan3$bad_loan)
+sub_loan3$verification_status <- as.factor(sub_loan3$verification_status)
+sub_loan3$addr_state<- as.factor(sub_loan3$addr_state)
+sub_loan3$grade <- as.factor(sub_loan3$grade)
+sub_loan3$term <- as.factor(sub_loan3$term)
+sub_loan3$delinq_month <- as.factor(sub_loan3$delinq_month)
+sub_loan3$derog_month <- as.factor(sub_loan3$derog_month)
+
+sub_loan3$dti <- as.factor(sub_loan3$dti)
+sub_loan3$inq_last_6mths <- as.factor(sub_loan3$inq_last_6mths)
+sub_loan3$pub_rec <- as.factor(sub_loan3$pub_rec)
+sub_loan3$revol_bal <- as.factor(sub_loan3$revol_bal)
+sub_loan3$revol_util <- as.factor(sub_loan3$revol_util)
+sub_loan3$term <- as.factor(sub_loan3$term)
+#sub_loan3$int_rate <- as.factor(sub_loan3$int_rate)
+#sub_loan3$installment <- as.factor(sub_loan3$installment)
+#sub_loan3$issue_d <- as.factor(sub_loan3$issue_d)
+#sub_loan3$earliest_cr_line <- as.factor(sub_loan3$earliest_cr_line)
+
+
+
+```
+```{r echo=FALSE, message=FALSE}
+sub_loan$purpose <- as.factor(sub_loan$purpose)
+sub_loan$home_ownership <- as.factor(sub_loan$home_ownership)
+sub_loan$loan_status <- as.factor(sub_loan$loan_status)
+sub_loan$emp_length <- as.factor(sub_loan$emp_length)
+sub_loan$bad_loan <- as.factor(sub_loan$bad_loan)
+sub_loan$verification_status <- as.factor(sub_loan$verification_status)
+sub_loan$addr_state<- as.factor(sub_loan$addr_state)
+sub_loan$grade <- as.factor(sub_loan$grade)
+sub_loan$term <- as.factor(sub_loan$term)
+sub_loan$delinq_month <- as.factor(sub_loan$delinq_month)
+sub_loan$derog_month <- as.factor(sub_loan$derog_month)
+
+sub_loan$dti <- as.factor(sub_loan$dti)
+sub_loan$inq_last_6mths <- as.factor(sub_loan$inq_last_6mths)
+sub_loan$pub_rec <- as.factor(sub_loan$pub_rec)
+sub_loan$revol_bal <- as.factor(sub_loan$revol_bal)
+sub_loan$revol_util <- as.factor(sub_loan$revol_util)
+sub_loan$term <- as.factor(sub_loan$term)
+#sub_loan3$int_rate <- as.factor(sub_loan3$int_rate)
+#sub_loan3$installment <- as.factor(sub_loan3$installment)
+#sub_loan3$issue_d <- as.factor(sub_loan3$issue_d)
+#sub_loan3$earliest_cr_line <- as.factor(sub_loan3$earliest_cr_line)
+
+
+
+```
+```{r echo=FALSE, message=FALSE}
+## Looking for correlation
+#Annual Income
+ggplot(sub_loan, aes(annual_inc)) + 
+  geom_histogram() +
+  labs(title = "Distribution of Annual Income",
+       subtitle = "Vertical lines represent mean (red) and median (blue)") +
+  geom_vline(xintercept = mean(sub_loan$annual_inc), col = 2) +
+  geom_vline(xintercept = median(sub_loan$annual_inc), col = 4)
+```
+```{r echo=FALSE, message=FALSE}
+ggplot(sub_loan, aes(log(annual_inc))) + 
+  geom_histogram() +
+  labs(title = "Distribution of log Annual Income",
+       subtitle = "Vertical lines represent mean (red) and median (blue)") +
+  geom_vline(xintercept = mean(log(sub_loan$annual_inc)), col = 2) +
+  geom_vline(xintercept = median(log(sub_loan$annual_inc)), col = 4)
+```
+```{r echo=FALSE, message=FALSE}
+ggplot(sub_loan, aes(bad_loan, group= verification_status)) + geom_bar(aes(y= ..prop.., fill = factor(..x..)), stat="count")+  facet_grid(~verification_status) + labs(title = "The proportion of bad loan by verification status")
+```
+```{r echo=FALSE, message=FALSE}
+ggplot(sub_loan, aes(x = log(annual_inc), y = loan_amnt, col = bad_loan)) + geom_point(size = 0.1) + stat_smooth(method = "lm")+ labs(title = "Logged Annual Income with loan amount")
+```
+```{r echo=FALSE, message=FALSE}
+count_ho<- sub_loan%>%
+    group_by(as.factor(issue_d), home_ownership) %>%
+  summarise(cnt= n())
+
+  ggplot(count_ho, aes(x = count_ho$`as.factor(issue_d)`, y = cnt, fill= home_ownership)) + geom_bar(stat = "identity") + labs(x= "Issue Year", y= "Count", title = "Relationship of number of loan issued by home ownership and issued year")
+```
+```{r echo=FALSE, message=FALSE}
+sub_loan%>%
+  group_by(issue_d, purpose) %>%
+  summarise(cnt= n())%>%
+  ggplot(aes(x = issue_d, y = cnt, col= purpose)) + 
+  geom_line(stat = "identity")+
+  labs(x= "Issue Year", y= "Count", title = "Number of Loan Issued with Year by Purpose")
+```
+```{r echo=FALSE, message=FALSE}
+ggplot(sub_loan, aes(x= as.factor(issue_d) , y=loan_amnt)) + geom_boxplot(aes(fill = grade))+ labs(x= "Issue Year", y= "Loan Amount")
+```
+```{r echo=FALSE, message=FALSE}
+suppressPackageStartupMessages(library(maps))
+loan$region <- loan$addr_state
+loan$region <- as.factor(loan$region)
+levels(loan$region)<- c("alaska", "alabama","arkansas", "arizona", "california","colorado","connecticut","district of columbia","delaware","florida","georgia","hawaii","iowa","idaho","illinois","indiana","kansas","kentucky","louisiana","massachusetts","maryland","maine","michigan","minnesota","missouri","mississippi","montana","north carolina","north dakota","nebraska","new hampshire","new jersey","new mexico","nevada","new york","ohio","oklahoma","oregon","pennsylvania","rhode island","south carolina","south dakota","tennessee","texas","utah","virginia","vermont","washington","wisconsin","west virginia","wyoming")
+
+all_states <- map_data("state")
+state_by_loan <-loan %>% group_by(region) %>%
+                summarise(value = sum(loan_amnt, na.rm=TRUE))
+state_by_loan$region <- as.character(state_by_loan$region)
+
+Total <- merge(all_states, state_by_loan, by="region")
+
+p <- ggplot()
+p <- p + geom_polygon(data=Total, aes(x=long, y=lat, group = group, fill=value),colour="white"
+      ) + scale_fill_continuous(low = "lightblue", high = "darkblue", guide="colorbar")
+P1 <- p + theme_bw()  + labs(fill = "Gradient of loan amount" 
+                            ,title = "Heat Map of loan amount in all states", x="", y="")
+P1 + scale_y_continuous(breaks=c()) + scale_x_continuous(breaks=c()) + theme(panel.border =  element_blank())
+```
+```{r echo=FALSE, message=FALSE}
+#subset train & test data set
+loan_size <- floor(0.75 * nrow(sub_loan2))
+
+set.seed(1202)
+train_ind<- sample(seq_len(nrow(sub_loan2)), size = loan_size)
+
+train1 <- sub_loan2[train_ind, ]
+test1 <- sub_loan2[-train_ind, ]
+
+summary(train1)
+```
+```{r echo=FALSE, message=FALSE}
+#subset train & test data set
+dim(train1)
+```
+```{r echo=FALSE, message=FALSE}
+#subset train & test data set
+dim(test1)
+```
+```{r echo=FALSE, message=FALSE, warnings =FALSE}
+#Logistic model
+set.seed(1202)
+glm_model <- train(bad_loan ~ log(annual_inc)+ open_acc + dti+ 
+                     emp_length + home_ownership + purpose + delinq_2yrs+ 
+                     inq_last_6mths+ pub_rec+ revol_bal+ revol_util+ verification_status +
+                     term + grade + int_rate+ installment+ issue_d+ earliest_cr_line + delinq_month,
+                   data = train1,na.action=na.exclude,
+                   preProcess= c("center", "scale"),method = "glm")
+
+glm_model
+```
+```{r echo=FALSE, message=FALSE}
+summary(glm_model)
+```
+```{r echo=FALSE, message=FALSE}
+train_control <- trainControl(method = "cv", number = 10)
+
+glm_cv <- train(bad_loan ~ log(annual_inc)+ open_acc+ purpose+ dti+ 
+                     emp_length+ home_ownership+ purpose+ delinq_2yrs+ 
+                     inq_last_6mths+ pub_rec+ revol_bal+ revol_util+ verification_status+
+                  term + grade + int_rate+ installment+ issue_d+ earliest_cr_line+ delinq_month,
+                   data = train1,na.action=na.exclude,
+                trControl= train_control,
+                   method = "glm")
+
+
+
+summary(glm_cv)
+```
+```{r echo=FALSE, message=FALSE}
+glm_cv
+```
+```{r echo=FALSE, message=FALSE}
+pred<-predict(glm_model, newdata = test1)
+confusionMatrix(data=pred, test1$bad_loan)
+```
+```{r echo=FALSE, message=FALSE}
+dim(pred)
+```
+```{r echo=FALSE, message=FALSE}
+
+```
+```{r echo=FALSE, message=FALSE}
+
+```
+```{r echo=FALSE, message=FALSE}
+
+```
+```{r echo=FALSE, message=FALSE}
+
+```
